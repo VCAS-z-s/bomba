@@ -1,0 +1,2 @@
+# bomba
+Tikající bomba
