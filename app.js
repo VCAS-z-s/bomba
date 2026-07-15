@@ -10,6 +10,7 @@
   const SETTINGS_KEY = "bomba-settings-v1";
   const MAX_SECONDS = 3600;
   const TICK_TEST_DURATION_MS = 2200;
+  const EXPLOSION_STATUS_HOLD_MS = 5000;
 
   const state = {
     gameState: "ready",
@@ -21,6 +22,7 @@
     rafId: 0,
     explosionTimeoutId: 0,
     tickPreviewTimeoutId: 0,
+    explosionStatusTimeoutId: 0,
     wakeLock: null,
   };
 
@@ -50,7 +52,6 @@
     elements.statusText = document.getElementById("statusText");
     elements.errorText = document.getElementById("errorText");
     elements.countdownText = document.getElementById("countdownText");
-    elements.bombStage = document.getElementById("bombStage");
     elements.startButton = document.getElementById("startButton");
     elements.manualExplosionButton = document.getElementById("manualExplosionButton");
     elements.stopButton = document.getElementById("stopButton");
@@ -61,10 +62,15 @@
   function bindEvents() {
     elements.startButton.addEventListener("click", startGame);
     elements.stopButton.addEventListener("click", () => stopGame("Kolo zastaveno"));
-    elements.manualExplosionButton.addEventListener("click", () => triggerExplosion("manual"));
+    elements.manualExplosionButton.addEventListener("click", handleManualExplosionClick);
     elements.testTickButton.addEventListener("click", testTicking);
     elements.testExplosionButton.addEventListener("click", testExplosion);
     elements.form.addEventListener("input", handleSettingsInput);
+    elements.form.addEventListener("click", resetExplosionStatusIfIdle);
+    elements.startButton.addEventListener("click", resetExplosionStatusIfIdle);
+    elements.stopButton.addEventListener("click", resetExplosionStatusIfIdle);
+    elements.testTickButton.addEventListener("click", resetExplosionStatusIfIdle);
+    elements.testExplosionButton.addEventListener("click", resetExplosionStatusIfIdle);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("beforeunload", cancelActiveTimers);
   }
@@ -73,6 +79,7 @@
     if (!state.isRunning) {
       clearError();
       saveSettings();
+      updateControls();
     }
   }
 
@@ -211,6 +218,7 @@
     state.isRunning = false;
     hideCountdown();
     clearError();
+    setGameState("ready", "Připraveno");
   }
 
   async function ensureAudioReady() {
@@ -314,10 +322,36 @@
 
     if (origin === "manual") {
       elements.manualExplosionButton.disabled = true;
-      elements.manualExplosionButton.hidden = true;
     }
 
+    latchExplosionStatus();
     window.setTimeout(() => finishGame(), 260);
+  }
+
+  async function handleManualExplosionClick() {
+    if (state.isRunning) {
+      await triggerExplosion("manual");
+      return;
+    }
+
+    if (!elements.allowManualExplosion.checked) {
+      return;
+    }
+
+    clearError();
+    cancelActiveTimers();
+    stopTicking();
+    setGameState("exploded", "Výbuch!");
+    elements.manualExplosionButton.disabled = true;
+
+    try {
+      await ensureAudioReady();
+      await playExplosion(state.roundId);
+    } catch (_error) {
+      showError("Ukázku výbuchu se nepodařilo přehrát.");
+    }
+
+    latchExplosionStatus();
   }
 
   function stopGame(statusMessage, options = {}) {
@@ -357,15 +391,43 @@
       window.clearTimeout(state.tickPreviewTimeoutId);
       state.tickPreviewTimeoutId = 0;
     }
+    if (state.explosionStatusTimeoutId) {
+      window.clearTimeout(state.explosionStatusTimeoutId);
+      state.explosionStatusTimeoutId = 0;
+    }
   }
 
   function setGameState(nextState, statusMessage) {
     state.gameState = nextState;
     elements.statusText.textContent = statusMessage;
-    elements.bombStage.dataset.state =
-      nextState === "running" ? "running" :
-      nextState === "exploded" ? "exploded" :
-      "ready";
+  }
+
+  function latchExplosionStatus() {
+    if (state.explosionStatusTimeoutId) {
+      window.clearTimeout(state.explosionStatusTimeoutId);
+    }
+    state.explosionStatusTimeoutId = window.setTimeout(() => {
+      if (!state.isRunning && state.gameState === "exploded") {
+        resetExplosionStatus();
+      }
+    }, EXPLOSION_STATUS_HOLD_MS);
+  }
+
+  function resetExplosionStatusIfIdle() {
+    if (!state.isRunning && state.gameState === "exploded") {
+      resetExplosionStatus();
+    }
+  }
+
+  function resetExplosionStatus() {
+    if (state.explosionStatusTimeoutId) {
+      window.clearTimeout(state.explosionStatusTimeoutId);
+      state.explosionStatusTimeoutId = 0;
+    }
+    if (!state.isRunning) {
+      setGameState("ready", "Připraveno");
+      updateControls();
+    }
   }
 
   function updateControls() {
@@ -379,7 +441,7 @@
     elements.testTickButton.disabled = running;
     elements.testExplosionButton.disabled = running;
 
-    const showManualButton = running && elements.allowManualExplosion.checked;
+    const showManualButton = elements.allowManualExplosion.checked;
     elements.manualExplosionButton.hidden = !showManualButton;
     elements.manualExplosionButton.disabled = !showManualButton;
   }

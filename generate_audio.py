@@ -66,6 +66,21 @@ def mix_layers(*layers):
     return mixed
 
 
+def normalize(samples, peak=0.96):
+    max_value = max((abs(sample) for sample in samples), default=0.0)
+    if max_value <= 0.0:
+        return samples
+    scale = peak / max_value
+    return [sample * scale for sample in samples]
+
+
+def soft_clip(samples, drive=1.0):
+    clipped = []
+    for sample in samples:
+        clipped.append(math.tanh(sample * drive) / math.tanh(drive))
+    return clipped
+
+
 def low_pass(samples, smoothing=0.18):
     filtered = []
     previous = 0.0
@@ -111,18 +126,32 @@ def generate_tick():
 
 
 def generate_explosion():
-    duration_s = 1.7
-    low_boom = envelope(tone(58, duration_s, amplitude=0.65), 0.004, 1.25)
-    mid_boom = envelope(tone(96, duration_s, amplitude=0.28, phase=0.7), 0.003, 0.95)
-    crack = envelope(tone(1400, 0.08, amplitude=0.2), 0.001, 0.08)
-    crack.extend([0.0] * (int(duration_s * SAMPLE_RATE) - len(crack)))
+    duration_s = 1.95
+    frame_count = int(duration_s * SAMPLE_RATE)
 
-    noise = low_pass(white_noise(duration_s, amplitude=0.78), smoothing=0.055)
-    noise = envelope(noise, 0.002, 1.35)
+    sub_boom = envelope(tone(41, duration_s, amplitude=1.12), 0.001, 1.6)
+    low_boom = envelope(tone(55, duration_s, amplitude=0.92, phase=0.2), 0.002, 1.42)
+    mid_boom = envelope(tone(88, duration_s, amplitude=0.54, phase=0.7), 0.002, 1.12)
+    punch = envelope(tone(128, duration_s, amplitude=0.26, phase=0.4), 0.001, 0.44)
 
-    wave_samples = mix_layers(low_boom, mid_boom, crack, noise)
-    apply_fade(wave_samples, 0.001, 0.14)
-    return [sample * 0.54 for sample in wave_samples]
+    crack = envelope(tone(2100, 0.13, amplitude=0.42), 0.0006, 0.12)
+    crack.extend([0.0] * (frame_count - len(crack)))
+
+    slap = envelope(tone(940, 0.18, amplitude=0.34, phase=0.5), 0.0008, 0.14)
+    slap.extend([0.0] * (frame_count - len(slap)))
+
+    attack_noise = low_pass(white_noise(duration_s, amplitude=1.22), smoothing=0.038)
+    attack_noise = envelope(attack_noise, 0.0008, 1.2)
+
+    tail_noise = low_pass(white_noise(duration_s, amplitude=0.62), smoothing=0.014)
+    tail_noise = envelope(tail_noise, 0.01, 1.9)
+
+    wave_samples = mix_layers(
+        sub_boom, low_boom, mid_boom, punch, crack, slap, attack_noise, tail_noise
+    )
+    apply_fade(wave_samples, 0.001, 0.18)
+    wave_samples = soft_clip(wave_samples, drive=1.45)
+    return normalize(wave_samples, peak=0.97)
 
 
 def png_chunk(chunk_type, payload):
